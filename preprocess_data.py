@@ -19,7 +19,6 @@ def preprocess_data(min_token_freq=5, caption_max_len=50, captions_per_image=5):
     :param caption_max_len: maximum allowed length of captions
     """
 
-    # Store images and captions
     image_train = []
     image_validation = []
     image_test = []
@@ -27,27 +26,30 @@ def preprocess_data(min_token_freq=5, caption_max_len=50, captions_per_image=5):
     captions_validation = []
     captions_test = []
 
-    with open(dataset_split_path, 'r') as f:
-        dataset = json.load(f)
+    # Read data
+    dataset = load_dataset()
 
+    # Process each image in the dataset
     for image in dataset["images"]:
-        captions = process_captions(caption_max_len, image)
 
-        if len(captions) == 0:
+        # Read and process the captions for the image
+        processed_captions = process_captions(caption_max_len, image)
+
+        if len(processed_captions) == 0:
             continue
 
         path = os.path.join(dataset_image_path, image['filename'])
 
-        train_val_test_split(captions, captions_test, captions_train, captions_validation, image, image_test,
+        train_val_test_split(processed_captions, captions_test, captions_train, captions_validation, image, image_test,
                              image_train, image_validation, path)
 
     assert_valid_train_val_test_split(captions_test, captions_train, captions_validation, image_test, image_train,
                                       image_validation)
 
     all_captions = captions_train + captions_validation + captions_test
-    vocab_map = create_vocabulary(all_captions, min_token_freq, caption_max_len)
+    vocab = create_vocabulary(all_captions, min_token_freq, caption_max_len)
 
-    base_filename = save_vocab_map_to_json(captions_per_image, min_token_freq, vocab_map)
+    base_filename = save_vocab_map_to_json(captions_per_image, min_token_freq, vocab.stoi)
 
     for image_paths, image_captions, split in [(image_train, captions_train, 'TRAIN'),
                                                (image_validation, captions_validation, 'VAL'),
@@ -61,19 +63,43 @@ def preprocess_data(min_token_freq=5, caption_max_len=50, captions_per_image=5):
 
             print("\nReading %s images and captions, storing to file...\n" % split)
 
-            encoded_captions = []
-            caption_lengths = []
+            cap_len, enc_cap = encode_captions_save_images(captions_per_image, image_captions,
+                                                           image_paths, images, vocab)
 
-            for i, path in enumerate(tqdm(image_paths)):
-                captions = sample_captions(i, captions_per_image, image_captions)
-                img = read_format_image(i, image_paths)
+            # Sanity check
+            assert images.shape[0] * captions_per_image == len(enc_cap) == len(cap_len)
 
-                # Save image to HDF5 file
-                images[i] = img
+            save_encoded_captions_and_lengths_to_json(base_filename, cap_len, enc_cap, split)
 
-                pass
-            pass
-        pass
+
+def load_dataset():
+    with open(dataset_split_path, 'r') as f:
+        dataset = json.load(f)
+    return dataset
+
+
+def save_encoded_captions_and_lengths_to_json(base_filename, cap_len, enc_cap, split):
+    with open(os.path.join(data_folder, split + '_CAPTIONS_' + base_filename + '.json'), 'w') as j:
+        json.dump(enc_cap, j)
+    with open(os.path.join(data_folder, split + '_CAPLENS_' + base_filename + '.json'), 'w') as j:
+        json.dump(cap_len, j)
+
+
+def encode_captions_save_images(captions_per_image, image_captions, image_paths, images, vocab):
+    encoded_captions = []
+    caption_lengths = []
+    for i, path in enumerate(tqdm(image_paths)):
+        captions = sample_captions(i, captions_per_image, image_captions)
+        img = read_format_image(i, image_paths)
+
+        # Save image to HDF5 file
+        images[i] = img
+
+        # Encode captions
+        [enc, cap_len] = vocab.encode(captions)
+        encoded_captions.extend(enc)
+        caption_lengths.extend(cap_len)
+    return caption_lengths, encoded_captions
 
 
 def read_format_image(i, image_paths):
@@ -129,10 +155,10 @@ def assert_valid_train_val_test_split(captions_test, captions_train, captions_va
     assert len(image_test) == len(captions_test)
 
 
-def create_vocabulary(captions, min_token_freq, caption_max_len) -> dict:
+def create_vocabulary(captions, min_token_freq, caption_max_len) -> Vocabulary:
     vocab = Vocabulary(min_token_freq, caption_max_len)
     vocab.build(captions)
-    return vocab.stoi
+    return vocab
 
 
 def save_vocab_map_to_json(captions_per_image, min_token_freq, vocab_map) -> str:
