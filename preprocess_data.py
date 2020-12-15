@@ -45,24 +45,28 @@ def preprocess_data(min_token_freq=5, caption_max_len=50, captions_per_image=5):
                                       image_validation)
 
     all_captions = captions_train + captions_validation + captions_test
-    vocab_map = create_vocabulary(all_captions, min_token_freq, caption_max_len)
+    vocab = create_vocabulary(all_captions, min_token_freq, caption_max_len)
 
-    base_filename = save_vocab_map_to_json(captions_per_image, min_token_freq, vocab_map)
+    base_filename = 'flickr8k' + '_' + str(captions_per_image) + '_cap_per_img_' + str(
+        min_token_freq) + '_min_token_freq'
 
+    save_vocab_map_to_json(base_filename, vocab.stoi)
+
+    # Save images to HDF5 file, and captions and their lengths to JSON files.
     for image_paths, image_captions, split in [(image_train, captions_train, 'TRAIN'),
                                                (image_validation, captions_validation, 'VAL'),
                                                (image_test, captions_test, 'TEST')]:
         with h5py.File(os.path.join(data_folder, split + '_IMAGES_' + base_filename + '.hdf5'), 'a') as h:
-            # Note the number of captions we are sampling per image
+            # Note the number of captions we are sampling per image - see sample_captions()
             h.attrs['captions_per_image'] = captions_per_image
 
-            # Create dataset inside HDF5 to store images
+            # Create dataset inside HDF5 to store images.
             images = h.require_dataset('images', (len(image_paths), 3, 256, 256), dtype='uint8')
 
             print("\nReading %s images and captions, storing to file...\n" % split)
 
-            encoded_captions = []
-            caption_lengths = []
+            encoded_captions_all = []
+            caption_lengths_all = []
 
             for i, path in enumerate(tqdm(image_paths)):
                 captions = sample_captions(i, captions_per_image, image_captions)
@@ -71,12 +75,20 @@ def preprocess_data(min_token_freq=5, caption_max_len=50, captions_per_image=5):
                 # Save image to HDF5 file
                 images[i] = img
 
-                pass
-            pass
-        pass
+                # Encode captions and get their lengths
+                (encoded_captions, caption_lengths) = vocab.encode(captions)
+                encoded_captions_all.append(encoded_captions)
+                caption_lengths_all.append(caption_lengths)
+
+            # Save encoded captions and image lengths to JSON
+            save_encoded_captions_and_lengths_to_json(base_filename, split, encoded_captions_all, caption_lengths_all)
+
 
 
 def read_format_image(i, image_paths):
+    """
+    ImageNet requires 3-channel 256x256 images, so images must be resized.
+    """
     img = cv2.imread(image_paths[i])
     if len(img.shape) == 2:  # Grey-scale image
         img = img[:, :, np.newaxis]
@@ -90,6 +102,10 @@ def read_format_image(i, image_paths):
 
 
 def sample_captions(i, captions_per_image, image_captions) -> list:
+    """
+    If number of captions for an image is less than captions_per_image, we need to sample from
+    the existing captions to fill out.
+    """
     if len(image_captions[i]) < captions_per_image:  # with replacement
         captions = image_captions[i] + [choice(image_captions[i])
                                         for _ in range(captions_per_image - len(image_captions[i]))]
@@ -129,17 +145,20 @@ def assert_valid_train_val_test_split(captions_test, captions_train, captions_va
     assert len(image_test) == len(captions_test)
 
 
-def create_vocabulary(captions, min_token_freq, caption_max_len) -> dict:
+def create_vocabulary(captions, min_token_freq, caption_max_len) -> Vocabulary:
     vocab = Vocabulary(min_token_freq, caption_max_len)
     vocab.build(captions)
-    return vocab.stoi
+    return vocab
 
 
-def save_vocab_map_to_json(captions_per_image, min_token_freq, vocab_map) -> str:
-    base_filename = 'flickr8k' + '_' + str(captions_per_image) + '_cap_per_img_' + str(
-        min_token_freq) + '_min_token_freq'
-
-    with open(os.path.join('data/', 'VOCABMAP_' + base_filename + '.json'), 'w') as j:
+def save_vocab_map_to_json(base_filename, vocab_map):
+    with open(os.path.join(data_folder, 'VOCABMAP_' + base_filename + '.json'), 'w') as j:
         json.dump(vocab_map, j)
 
-    return base_filename
+
+def save_encoded_captions_and_lengths_to_json(base_filename, split, encoded_captions, caption_lengths):
+    with open(os.path.join(data_folder, split + '_CAPTIONS_' + base_filename + '.json'), 'w') as j:
+        json.dump(encoded_captions, j)
+
+    with open(os.path.join(data_folder, split + '_CAPLENS_' + base_filename + '.json'), 'w') as j:
+        json.dump(caption_lengths, j)
