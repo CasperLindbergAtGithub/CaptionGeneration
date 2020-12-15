@@ -58,14 +58,15 @@ def preprocess_data(min_token_freq=5, caption_max_len=50, captions_per_image=5):
     for image_paths, image_captions, split in [(image_train, captions_train, 'TRAIN'),
                                                (image_validation, captions_validation, 'VAL'),
                                                (image_test, captions_test, 'TEST')]:
+
+        print("\nReading %s images and captions, storing to file...\n" % split)
+
         with h5py.File(os.path.join(data_folder, split + '_IMAGES_' + base_filename + '.hdf5'), 'a') as h:
             # Note the number of captions we are sampling per image - see sample_captions()
             h.attrs['captions_per_image'] = captions_per_image
 
             # Create dataset inside HDF5 to store images.
             images = h.require_dataset('images', (len(image_paths), 3, 256, 256), dtype='uint8')
-
-            print("\nReading %s images and captions, storing to file...\n" % split)
 
             for i, path in enumerate(tqdm(image_paths)):
                 captions = sample_captions(i, captions_per_image, image_captions)
