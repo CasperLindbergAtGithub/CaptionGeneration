@@ -9,7 +9,7 @@ PAD = '<pad>'
 class Vocabulary:
     """Manages the numerical encoding of the vocabulary."""
 
-    def __init__(self, min_token_freq=None, caption_max_len=50):
+    def __init__(self, min_token_freq=5, caption_max_len=50):
         # String-to-integer mapping
         self.stoi = None
 
@@ -23,8 +23,12 @@ class Vocabulary:
         """Builds the vocabulary, based on a set of captions."""
 
         # Count token frequencies in captions
-        token_freqs = Counter(token for caption in captions for token in caption)
+        token_freqs = Counter()
+        for caption in captions:
+            for token in caption:
+                token_freqs.update(token)
 
+        # Only keep tokens occurring more frequently than self.min_token_freq
         tokens = [token for token in token_freqs.keys() if token_freqs[token] > self.min_token_freq]
 
         # Build the token mapping. Add special tokens to the vocabulary:
