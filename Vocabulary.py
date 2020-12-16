@@ -1,9 +1,17 @@
 from collections import Counter
+import os
+import json
 
 UNKNOWN = '<unk>'
 START = '<start>'
 END = '<end>'
 PAD = '<pad>'
+
+
+def load_vocab_from_json(data_name) -> dict:
+    word_map_file = os.path.join('data/', 'VOCABMAP_' + data_name + '.json')
+    with open(word_map_file, 'r') as j:
+        return json.load(j)
 
 
 class Vocabulary:
@@ -47,6 +55,10 @@ class Vocabulary:
                [self.stoi[PAD]] * (self.caption_max_len - len(caption)) for caption in captions]
         cap_len = [len(caption)+2 for caption in captions]
         return enc, cap_len
+
+    def save_vocab_to_json(self, base_filename):
+        with open(os.path.join('data/', 'VOCABMAP_' + base_filename + '.json'), 'w') as j:
+            json.dump(self.stoi, j)
 
     def get_unknown_idx(self):
         """Returns the integer index of the special dummy word representing unknown words."""
