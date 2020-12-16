@@ -3,6 +3,7 @@ from torch.utils.data import Dataset
 import h5py
 import json
 import os
+from utils import data_folder, data_name
 
 
 class CaptionDataset(Dataset):
@@ -10,22 +11,16 @@ class CaptionDataset(Dataset):
     A PyTorch Dataset class to be used in a PyTorch DataLoader to create batches.
     """
 
-    def __init__(self, data_folder, data_name, split, transform=None):
+    def __init__(self, split, transform=None):
         """
-        :param data_folder: folder where data files are stored
-        :param data_name: base name of processed datasets
         :param split: split, one of 'TRAIN', 'VAL', or 'TEST'
         :param transform: image transform pipeline
         """
         self.split = split
         assert self.split in {'TRAIN', 'VAL', 'TEST'}
 
-        # Open hdf5 file where images are stored
-        self.h = h5py.File(os.path.join(data_folder, self.split + '_IMAGES_' + data_name + '.hdf5'), 'r')
-        self.imgs = self.h['images']
-
-        # Captions per image
-        self.cpi = self.h.attrs['captions_per_image']
+        self.imgs = None
+        self.cpi = None
 
         # Load encoded captions (completely into memory)
         with open(os.path.join(data_folder, self.split + '_CAPTIONS_' + data_name + '.json'), 'r') as j:
@@ -42,6 +37,13 @@ class CaptionDataset(Dataset):
         self.dataset_size = len(self.captions)
 
     def __getitem__(self, i):
+        if self.imgs is None and self.cpi is None:
+            # Open hdf5 file where images are stored
+            h = h5py.File(os.path.join(data_folder, self.split + '_IMAGES_' + data_name + '.hdf5'), 'r')
+            self.imgs = h['images']
+            # Captions per image
+            self.cpi = h.attrs['captions_per_image']
+
         # Remember, the Nth caption corresponds to the (N // captions_per_image)th image
         img = torch.FloatTensor(self.imgs[i // self.cpi] / 255.)
         if self.transform is not None:

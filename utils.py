@@ -11,6 +11,7 @@ import torch
 dataset_image_path = 'data/Flicker8k_Dataset'
 dataset_split_path = 'data/dataset_flickr8k.json'
 data_folder = 'data/'
+data_name = 'flickr8k_5_cap_per_img_5_min_token_freq'  # base name shared by data files
 
 
 def preprocess_data(min_token_freq=5, caption_max_len=50, captions_per_image=5):
@@ -182,11 +183,10 @@ def adjust_learning_rate(optimizer, shrink_factor):
     print("The new learning rate is %f\n" % (optimizer.param_groups[0]['lr'],))
 
 
-def save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer, decoder_optimizer,
+def save_checkpoint(epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer, decoder_optimizer,
                     bleu4, is_best):
     """
     Saves model checkpoint.
-    :param data_name: base name of processed dataset
     :param epoch: epoch number
     :param epochs_since_improvement: number of epochs since last improvement in BLEU-4 score
     :param encoder: encoder model
@@ -203,11 +203,12 @@ def save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder
              'decoder': decoder,
              'encoder_optimizer': encoder_optimizer,
              'decoder_optimizer': decoder_optimizer}
+    absolute_path = os.path.abspath(os.curdir)+'\\checkpoints\\'
     filename = 'checkpoint_' + data_name + '.pth.tar'
-    torch.save(state, filename)
+    torch.save(state, absolute_path + filename)
     # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
     if is_best:
-        torch.save(state, 'BEST_' + filename)
+        torch.save(state, absolute_path + 'BEST_' + filename)
 
 
 class AverageMeter(object):
