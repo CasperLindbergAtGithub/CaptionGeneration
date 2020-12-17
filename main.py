@@ -3,7 +3,7 @@
 # Press Skift+F10 to execute it or replace it with your code.
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
 
-from preprocess_data import preprocess_data
+from utils import preprocess_data
 
 
 # Press the green button in the gutter to run the script.
