@@ -9,7 +9,7 @@ PAD = '<pad>'
 
 
 def load_vocab_from_json(data_name) -> dict:
-    word_map_file = os.path.join('data/', 'VOCABMAP_' + data_name + '.json')
+    word_map_file = os.path.join(data_name)
     with open(word_map_file, 'r') as j:
         return json.load(j)
 

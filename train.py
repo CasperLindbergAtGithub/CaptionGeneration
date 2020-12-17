@@ -179,7 +179,7 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         # Calculate loss
         loss = criterion(scores, targets)
 
-        # Add doubly stochastic attention regularization
+            # Add doubly stochastic attention regularization
         loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
 
         # Back prop.
