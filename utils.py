@@ -3,11 +3,11 @@ import numpy as np
 import h5py
 import json
 import torch
-import cv2
 from tqdm import tqdm
 from collections import Counter
 from random import seed, choice, sample
-
+from skimage.io import imread
+from skimage.transform import resize as imresize
 
 def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_image, min_word_freq, output_folder,
                        max_len=100):
@@ -23,7 +23,7 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
     :param max_len: don't sample captions longer than this length
     """
 
-    assert dataset in {'coco', 'flickr8k', 'flickr30k'}
+    assert dataset in {'coco', 'flickr8k'}
 
     # Read Karpathy JSON
     with open(karpathy_json_path, 'r') as j:
@@ -112,11 +112,11 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
                 assert len(captions) == captions_per_image
 
                 # Read images
-                img = cv2.imread(impaths[i])
+                img = imread(impaths[i])
                 if len(img.shape) == 2:
                     img = img[:, :, np.newaxis]
                     img = np.concatenate([img, img, img], axis=2)
-                img = cv2.resize(img, (256, 256))
+                img = imresize(img, (256, 256))
                 img = img.transpose(2, 0, 1)
                 assert img.shape == (3, 256, 256)
                 assert np.max(img) <= 255
@@ -227,11 +227,14 @@ def save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder
              'decoder': decoder,
              'encoder_optimizer': encoder_optimizer,
              'decoder_optimizer': decoder_optimizer}
-    filename = 'checkpoint_' + data_name + '.pth.tar'
-    torch.save(state, filename)
+
     # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
     if is_best:
-        torch.save(state, 'BEST_' + filename)
+        filename = '/checkpoints/BEST_checkpoint_' + data_name + '.pth.tar'
+        torch.save(state, filename)
+    else:
+        filename = '/checkpoints/checkpoint_' + data_name + '.pth.tar'
+        torch.save(state, filename)
 
 
 class AverageMeter(object):
