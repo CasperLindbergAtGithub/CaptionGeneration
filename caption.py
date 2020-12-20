@@ -30,18 +30,18 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
     vocab_size = len(word_map)
 
     # Read image and process
-    img = imread(image_path)
-    if len(img.shape) == 2:
-        img = img[:, :, np.newaxis]
-        img = np.concatenate([img, img, img], axis=2)
-    img = imresize(img, (256, 256))
-    img = img.transpose(2, 0, 1)
-    img = img / 255.
-    img = torch.FloatTensor(img).to(device)
+    input_img = imread(image_path)
+    if len(input_img.shape) == 2:
+        input_img = input_img[:, :, np.newaxis]
+        input_img = np.concatenate([input_img, input_img, input_img], axis=2)
+    input_img = imresize(input_img, (256, 256), preserve_range=True)
+    input_img = input_img.transpose(2, 0, 1)
+    input_img = input_img / 255.
+    input_img = torch.FloatTensor(input_img).to(device)
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
     transform = transforms.Compose([normalize])
-    image = transform(img)  # (3, 256, 256)
+    image = transform(input_img)  # (3, 256, 256)
 
     # Encode
     image = image.unsqueeze(0)  # (1, 3, 256, 256)
@@ -168,7 +168,7 @@ def visualize_att(image_path, seq, alphas, rev_word_map, smooth=True):
     for t in range(len(words)):
         if t > 50:
             break
-        plt.subplot(np.ceil(len(words) / 5.), 5, t + 1)
+        plt.subplot(int(np.ceil(len(words) / 5.)), 5, t + 1)
 
         plt.text(0, 1, '%s' % (words[t]), color='black', backgroundcolor='white', fontsize=12)
         plt.imshow(image)
@@ -189,9 +189,12 @@ def visualize_att(image_path, seq, alphas, rev_word_map, smooth=True):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Show, Attend, and Tell - Tutorial - Generate Caption')
 
-    parser.add_argument('--img', '-i', help='path to image')
-    parser.add_argument('--model', '-m', help='path to model')
-    parser.add_argument('--word_map', '-wm', help='path to word map JSON')
+    img = "data/Flicker8k_Dataset/197504190_fd1fc3d4b7.jpg"
+    model = "checkpoints/BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar"
+    wordmap = "data/WORDMAP_coco_5_cap_per_img_5_min_word_freq.json"
+    parser.add_argument('--img', '-i', default=img, help='path to image')
+    parser.add_argument('--model', '-m', default=model, help='path to model')
+    parser.add_argument('--word_map', '-wm', default=wordmap, help='path to word map JSON')
     parser.add_argument('--beam_size', '-b', default=5, type=int, help='beam size for beam search')
     parser.add_argument('--dont_smooth', dest='smooth', action='store_false', help='do not smooth alpha overlay')
 

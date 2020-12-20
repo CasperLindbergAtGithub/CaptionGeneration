@@ -93,7 +93,7 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
             h.attrs['captions_per_image'] = captions_per_image
 
             # Create dataset inside HDF5 file to store images
-            images = h.create_dataset('images', (len(impaths), 3, 256, 256), dtype='uint8')
+            images = h.require_dataset('images', (len(impaths), 3, 256, 256), dtype='uint8')
 
             print("\nReading %s images and captions, storing to file...\n" % split)
 
@@ -116,7 +116,7 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
                 if len(img.shape) == 2:
                     img = img[:, :, np.newaxis]
                     img = np.concatenate([img, img, img], axis=2)
-                img = imresize(img, (256, 256))
+                img = imresize(img, (256, 256), preserve_range=True)
                 img = img.transpose(2, 0, 1)
                 assert img.shape == (3, 256, 256)
                 assert np.max(img) <= 255
@@ -230,10 +230,10 @@ def save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder
 
     # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
     if is_best:
-        filename = '/checkpoints/BEST_checkpoint_' + data_name + '.pth.tar'
+        filename = 'checkpoints/BEST_checkpoint_' + data_name + '.pth.tar'
         torch.save(state, filename)
     else:
-        filename = '/checkpoints/checkpoint_' + data_name + '.pth.tar'
+        filename = 'checkpoints/checkpoint_' + data_name + '.pth.tar'
         torch.save(state, filename)
 
 
