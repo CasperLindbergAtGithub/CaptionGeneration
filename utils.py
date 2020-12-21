@@ -9,6 +9,7 @@ from random import seed, choice, sample
 from skimage.io import imread
 from skimage.transform import resize as imresize
 
+
 def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_image, min_word_freq, output_folder,
                        max_len=100):
     """
@@ -177,7 +178,7 @@ def load_embeddings(emb_file, word_map):
 
     # Read embedding file
     print("\nLoading embeddings...")
-    for line in open(emb_file, 'r'):
+    for line in open(emb_file,  'r', encoding="utf8"):
         line = line.split(' ')
 
         emb_word = line[0]
@@ -188,6 +189,9 @@ def load_embeddings(emb_file, word_map):
             continue
 
         embeddings[word_map[emb_word]] = torch.FloatTensor(embedding)
+
+    for weird_token in ['<unk>', '<start>', '<end>', '<pad>']:
+        embeddings[word_map[weird_token]] = 2 * torch.rand(emb_dim) - 1
 
     return embeddings, emb_dim
 

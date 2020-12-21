@@ -15,7 +15,7 @@ data_folder = 'data/'  # folder with data files saved by create_input_files.py
 data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'  # base name shared by data files
 
 # Model parameters
-emb_dim = 512  # dimension of word embeddings
+emb_dim = 300  # dimension of word embeddings
 attention_dim = 512  # dimension of attention linear layers
 decoder_dim = 512  # dimension of decoder RNN
 dropout = 0.5
@@ -34,8 +34,11 @@ grad_clip = 5.  # clip gradients at an absolute value of
 alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
-fine_tune_encoder = False  # fine-tune encoder?
 checkpoint = None #'checkpoints/checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'  # path to checkpoint, None if none
+fine_tune_encoder = False  # fine-tune encoder?
+fine_tune_decoder_embeddings = True  # fine-tune decoder embeddings?
+use_pretrained_word_embeddings = True
+emb_file = 'data/glove.6B.300d.txt'
 
 
 def main():
@@ -57,6 +60,13 @@ def main():
                                        decoder_dim=decoder_dim,
                                        vocab_size=len(word_map),
                                        dropout=dropout)
+
+        if use_pretrained_word_embeddings:
+            pretrained_embeddings, _ = load_embeddings(emb_file, word_map)
+            decoder.load_pretrained_embeddings(pretrained_embeddings)  # pretrained_embeddings should be of
+            # dimensions (len(word_map), emb_dim)
+
+        decoder.fine_tune_embeddings(fine_tune_decoder_embeddings)
         decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
                                              lr=decoder_lr)
         encoder = Encoder()
