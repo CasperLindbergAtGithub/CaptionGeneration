@@ -9,13 +9,14 @@ from models import Encoder, DecoderWithAttention
 from datasets import *
 from utils import *
 from nltk.translate.bleu_score import corpus_bleu
+from transformers import BertTokenizer
 
 # Data parameters
 data_folder = 'data/'  # folder with data files saved by create_input_files.py
-data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'  # base name shared by data files
+data_name = 'flickr8k_BERT_5_cap_per_img_5_min_word_freq'  # add / remove BERT if used / not used
 
 # Model parameters
-emb_dim = 300  # dimension of word embeddings
+emb_dim = 300  # dimension of word embeddings (not applicable for BERT or GloVe)
 attention_dim = 512  # dimension of attention linear layers
 decoder_dim = 512  # dimension of decoder RNN
 dropout = 0.5
@@ -26,7 +27,7 @@ cudnn.benchmark = True  # set to true only if inputs to model are fixed size; ot
 start_epoch = 0
 epochs = 24  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
-batch_size = 80
+batch_size = 32
 workers = 1  # for data-loading; right now, only 1 works with h5py
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
 decoder_lr = 4e-4  # learning rate for decoder
@@ -34,11 +35,11 @@ grad_clip = 5.  # clip gradients at an absolute value of
 alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
-checkpoint = None #'checkpoints/checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'  # path to checkpoint, None if none
+checkpoint = None  # 'checkpoints/checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'
 fine_tune_encoder = False  # fine-tune encoder?
 fine_tune_decoder_embeddings = True  # fine-tune decoder embeddings?
-use_pretrained_word_embeddings = True
-emb_file = 'data/glove.6B.300d.txt'
+pre_trained_embeddings_file = None  # 'data/glove.6B.300d.txt'
+bert_model_name = 'bert-base-cased'  # Bert model name or None to not use BERT
 
 
 def main():
@@ -49,20 +50,30 @@ def main():
     global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder, data_name, word_map
 
     # Read word map
-    word_map_file = os.path.join(data_folder, 'WORDMAP_' + data_name + '.json')
-    with open(word_map_file, 'r') as j:
-        word_map = json.load(j)
+    word_map = {}
+    if not bert_model_name:
+        word_map_file = os.path.join(data_folder, 'WORDMAP_' + data_name + '.json')
+        with open(word_map_file, 'r') as j:
+            word_map = json.load(j)
+
+    vocab_size = len(word_map)
+
+    bert_tokenizer = None
+    if bert_model_name:
+        bert_tokenizer = BertTokenizer.from_pretrained(bert_model_name)
+        vocab_size = bert_tokenizer.vocab_size
 
     # Initialize / load checkpoint
     if checkpoint is None:
         decoder = DecoderWithAttention(attention_dim=attention_dim,
                                        embed_dim=emb_dim,
                                        decoder_dim=decoder_dim,
-                                       vocab_size=len(word_map),
-                                       dropout=dropout)
+                                       vocab_size=vocab_size,
+                                       dropout=dropout,
+                                       bert_model_name=bert_model_name)
 
-        if use_pretrained_word_embeddings:
-            pretrained_embeddings, _ = load_embeddings(emb_file, word_map)
+        if pre_trained_embeddings_file:
+            pretrained_embeddings, _ = load_embeddings(pre_trained_embeddings_file, word_map)
             decoder.load_pretrained_embeddings(pretrained_embeddings)  # pretrained_embeddings should be of
             # dimensions (len(word_map), emb_dim)
 
@@ -129,7 +140,8 @@ def main():
         recent_bleu4 = validate(val_loader=val_loader,
                                 encoder=encoder,
                                 decoder=decoder,
-                                criterion=criterion)
+                                criterion=criterion,
+                                bert_tokenizer=bert_tokenizer)
 
         # Check if there was an improvement
         is_best = recent_bleu4 > best_bleu4
@@ -194,7 +206,6 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
 
         # Add doubly stochastic attention regularization
         loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
-
         # Back prop.
         decoder_optimizer.zero_grad()
         if encoder_optimizer is not None:
@@ -222,7 +233,7 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
 
         # Print status
         if i % print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}]\t'
+            print('\nEpoch: [{0}][{1}/{2}]\t'
                   'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data Load Time {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
@@ -232,10 +243,11 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
                                                                           top5=top5accs))
 
 
-def validate(val_loader, encoder, decoder, criterion):
+def validate(val_loader, encoder, decoder, criterion, bert_tokenizer=None):
     """
     Performs one epoch's validation.
 
+    :param bert_tokenizer:
     :param val_loader: DataLoader for validation data.
     :param encoder: encoder model
     :param decoder: decoder model
@@ -305,12 +317,15 @@ def validate(val_loader, encoder, decoder, criterion):
             # If for n images, we have n hypotheses, and references a, b, c... for each image, we need -
             # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
 
+            start_token = bert_tokenizer.cls_token_id if bert_tokenizer else word_map['<start>']
+            pad_token = bert_tokenizer.pad_token_id if bert_tokenizer else word_map['<pad>']
+
             # References
             allcaps = allcaps[sort_ind]  # because images were sorted in the decoder
             for j in range(allcaps.shape[0]):
                 img_caps = allcaps[j].tolist()
                 img_captions = list(
-                    map(lambda c: [w for w in c if w not in {word_map['<start>'], word_map['<pad>']}],
+                    map(lambda c: [w for w in c if w not in {start_token, pad_token}],
                         img_caps))  # remove <start> and pads
                 references.append(img_captions)
 

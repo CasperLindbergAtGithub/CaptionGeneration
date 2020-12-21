@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torchvision
+from BERTEncoder import BERTEncoder
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -91,7 +92,7 @@ class DecoderWithAttention(nn.Module):
     Decoder.
     """
 
-    def __init__(self, attention_dim, embed_dim, decoder_dim, vocab_size, encoder_dim=2048, dropout=0.5):
+    def __init__(self, attention_dim, embed_dim, decoder_dim, vocab_size, encoder_dim=2048, dropout=0.5, bert_model_name=None):
         """
         :param attention_dim: size of attention network
         :param embed_dim: embedding size
@@ -101,31 +102,38 @@ class DecoderWithAttention(nn.Module):
         :param dropout: dropout
         """
         super(DecoderWithAttention, self).__init__()
-
+        self.vocab_size = vocab_size
         self.encoder_dim = encoder_dim
         self.attention_dim = attention_dim
-        self.embed_dim = embed_dim
         self.decoder_dim = decoder_dim
-        self.vocab_size = vocab_size
         self.dropout = dropout
 
         self.attention = Attention(encoder_dim, decoder_dim, attention_dim)  # attention network
 
-        self.embedding = nn.Embedding(vocab_size, embed_dim)  # embedding layer
+        if bert_model_name:
+            print("\nLoading BertModel...\n")
+            self.embedding = BERTEncoder(bert_model_name)
+            self.embed_dim = self.embedding.output_size
+            print("\nFinished Loading BertModel...\n")
+        else:
+            self.embedding = nn.Embedding(vocab_size, embed_dim)
+            self.embed_dim = embed_dim
+
         self.dropout = nn.Dropout(p=self.dropout)
-        self.decode_step = nn.LSTMCell(embed_dim + encoder_dim, decoder_dim, bias=True)  # decoding LSTMCell
+        self.decode_step = nn.LSTMCell(self.embed_dim + encoder_dim, decoder_dim, bias=True)  # decoding LSTMCell
         self.init_h = nn.Linear(encoder_dim, decoder_dim)  # linear layer to find initial hidden state of LSTMCell
         self.init_c = nn.Linear(encoder_dim, decoder_dim)  # linear layer to find initial cell state of LSTMCell
         self.f_beta = nn.Linear(decoder_dim, encoder_dim)  # linear layer to create a sigmoid-activated gate
         self.sigmoid = nn.Sigmoid()
-        self.fc = nn.Linear(decoder_dim, vocab_size)  # linear layer to find scores over vocabulary
-        self.init_weights()  # initialize some layers with the uniform distribution
+        self.fc = nn.Linear(decoder_dim, self.vocab_size)  # linear layer to find scores over vocabulary
+        self.init_weights(bert_model_name)  # initialize some layers with the uniform distribution
 
-    def init_weights(self):
+    def init_weights(self, bert_model_name=None):
         """
         Initializes some parameters with values from the uniform distribution, for easier convergence.
         """
-        self.embedding.weight.data.uniform_(-0.1, 0.1)
+        if not bert_model_name:
+            self.embedding.weight.data.uniform_(-0.1, 0.1)
         self.fc.bias.data.fill_(0)
         self.fc.weight.data.uniform_(-0.1, 0.1)
 
