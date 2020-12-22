@@ -10,9 +10,11 @@ from tqdm import tqdm
 
 # Parameters
 data_folder = 'data/'  # folder with data files saved by create_input_files.py
-data_name = 'coco_5_cap_per_img_5_min_word_freq'  # base name shared by data files
-checkpoint = 'checkpoints/BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'  # model checkpoint
-word_map_file = 'data/WORDMAP_coco_5_cap_per_img_5_min_word_freq.json'  # word map, ensure it's the same the data was encoded with and the model was trained with
+use_bert = True
+data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'  # base name shared by data files
+checkpoint = 'checkpoints/BEST_checkpoint_BERT_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar'  # model checkpoint
+word_map_file = 'data/WORDMAP_flickr8k_5_cap_per_img_5_min_word_freq.json'  # word map, ensure it's the same the data
+# was encoded with and the model was trained with
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
@@ -48,18 +50,17 @@ def evaluate(beam_size):
         CaptionDataset(data_folder, data_name, 'TEST', transform=transforms.Compose([normalize])),
         batch_size=1, shuffle=True, num_workers=1, pin_memory=True)
 
-    # TODO: Batched Beam Search
-    # Therefore, do not use a batch_size greater than 1 - IMPORTANT!
-
     # Lists to store references (true captions), and hypothesis (prediction) for each image
     # If for n images, we have n hypotheses, and references a, b, c... for each image, we need -
     # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
     references = list()
     hypotheses = list()
+    beam_size = 1 if use_bert else beam_size
+    k = beam_size
 
     # For each image
     for i, (image, caps, caplens, allcaps) in enumerate(
-            tqdm(loader, desc="EVALUATING AT BEAM SIZE " + str(beam_size))):
+            tqdm(loader, desc="EVALUATING AT BEAM SIZE " + str(k))):
 
         k = beam_size
 
@@ -97,8 +98,11 @@ def evaluate(beam_size):
 
         # s is a number less than or equal to k, because sequences are removed from this process once they hit <end>
         while True:
-
-            embeddings = decoder.embedding(k_prev_words).squeeze(1)  # (s, embed_dim)
+            if use_bert:
+                bert_embedded_encodings = decoder.load_bert_embeddings(seqs)
+                embeddings = bert_embedded_encodings[:,-1,:]
+            else:
+                embeddings = decoder.embedding(k_prev_words).squeeze(1)  # (s, embed_dim)
 
             awe, _ = decoder.attention(encoder_out, h)  # (s, encoder_dim), (s, num_pixels)
 
@@ -150,6 +154,10 @@ def evaluate(beam_size):
 
             # Break if things have been going on too long
             if step > 50:
+                # Finish all senctences.
+                complete_inds = list(set(range(len(seqs))))
+                complete_seqs.extend(seqs[complete_inds].tolist())
+                complete_seqs_scores.extend(top_k_scores[complete_inds])
                 break
             step += 1
 
@@ -175,5 +183,5 @@ def evaluate(beam_size):
 
 
 if __name__ == '__main__':
-    beam_size = 1
+    beam_size = 5
     print("\nBLEU-4 score @ beam size of %d is %.4f." % (beam_size, evaluate(beam_size)))

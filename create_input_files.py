@@ -1,5 +1,7 @@
 from utils import create_input_files
 
+max_caption_length = 50
+
 if __name__ == '__main__':
     # Create input files (along with word map)
 
@@ -9,5 +11,5 @@ if __name__ == '__main__':
                        captions_per_image=5,
                        min_word_freq=5,
                        output_folder='data/',
-                       max_len=50,
+                       max_len=max_caption_length,
                        bert_model_name='bert-base-cased')

@@ -8,11 +8,10 @@ from collections import Counter
 from random import seed, choice, sample
 from skimage.io import imread
 from skimage.transform import resize as imresize
-from transformers import BertTokenizer
 
 
 def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_image, min_word_freq, output_folder,
-                       max_len=100, bert_model_name=None):
+                       max_len=100):
     """
     Creates input files for training, validation, and test data.
 
@@ -23,7 +22,6 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
     :param min_word_freq: words occuring less frequently than this threshold are binned as <unk>s
     :param output_folder: folder to save files
     :param max_len: don't sample captions longer than this length
-    :param bert_model_name: A BERT model from the Transformers library
     """
 
     assert dataset in {'coco', 'flickr8k'}
@@ -31,11 +29,6 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
     # Read Karpathy JSON
     with open(karpathy_json_path, 'r') as j:
         data = json.load(j)
-
-    bert_tokenizer = None
-    if bert_model_name:
-        print("\nLoading BertTokenizer...\n")
-        bert_tokenizer = BertTokenizer.from_pretrained(bert_model_name)
 
     # Read image paths and captions for each image
     train_image_paths = []
@@ -76,22 +69,21 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
     assert len(test_image_paths) == len(test_image_captions)
 
     # Create a base/root name for all output files
-    bert = "BERT" if bert_tokenizer else ""
-    base_filename = dataset + '_' + bert + '_' + str(captions_per_image) + '_cap_per_img_' + str(
+    base_filename = dataset + '_' + str(captions_per_image) + '_cap_per_img_' + str(
         min_word_freq) + '_min_word_freq'
 
-    if not bert_tokenizer:
-        # Create word map
-        words = [w for w in word_freq.keys() if word_freq[w] > min_word_freq]
-        word_map = {k: v + 1 for v, k in enumerate(words)}
-        word_map['<unk>'] = len(word_map) + 1
-        word_map['<start>'] = len(word_map) + 1
-        word_map['<end>'] = len(word_map) + 1
-        word_map['<pad>'] = 0
 
-        # Save word map to a JSON
-        with open(os.path.join(output_folder, 'WORDMAP_' + base_filename + '.json'), 'w') as j:
-            json.dump(word_map, j)
+    # Create word map
+    words = [w for w in word_freq.keys() if word_freq[w] > min_word_freq]
+    word_map = {k: v + 1 for v, k in enumerate(words)}
+    word_map['<unk>'] = len(word_map) + 1
+    word_map['<start>'] = len(word_map) + 1
+    word_map['<end>'] = len(word_map) + 1
+    word_map['<pad>'] = 0
+
+    # Save word map to a JSON
+    with open(os.path.join(output_folder, 'WORDMAP_' + base_filename + '.json'), 'w') as j:
+        json.dump(word_map, j)
 
     # Sample captions for each image, save images to HDF5 file, and captions and their lengths to JSON files
     seed(123)
@@ -137,37 +129,17 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
 
                 for j, c in enumerate(captions):
                     # Encode captions
-                    if bert_tokenizer:
-                        # 1) Tokenize and truncate to max length, reserve 2 tokens for start and end
-                        tokenized_caption = bert_tokenizer.tokenize(" ".join(c))[:max_len - 2]
+                    enc_c = [word_map['<start>']] + [word_map.get(word, word_map['<unk>']) for word in c] + [
+                        word_map['<end>']] + [word_map['<pad>']] * (max_len - len(c))
 
-                        # 2) Encode as integers. This will automatically add the dummy tokens
-                        # [CLS] at the first position and [SEP] at the last position.
-                        encoded_caption = bert_tokenizer.encode(tokenized_caption)
+                    # Find caption lengths
+                    c_len = len(c) + 2
 
-                        # 3) Pad shorter captions
-                        enc_cap_length = len(encoded_caption)
-                        encoded_caption_padded = encoded_caption + [bert_tokenizer.pad_token_id] * (
-                                    max_len - enc_cap_length)
-
-                        # Save caption
-                        enc_captions.append(encoded_caption_padded)
-                        caplens.append(enc_cap_length)
-                    else:
-                        enc_c = [word_map['<start>']] + [word_map.get(word, word_map['<unk>']) for word in c] + [
-                            word_map['<end>']] + [word_map['<pad>']] * (max_len - len(c))
-
-                        # Find caption lengths
-                        c_len = len(c) + 2
-
-                        enc_captions.append(enc_c)
-                        caplens.append(c_len)
+                    enc_captions.append(enc_c)
+                    caplens.append(c_len)
 
             # Sanity check
             assert images.shape[0] * captions_per_image == len(enc_captions) == len(caplens)
-
-
-
             # Save encoded captions and their lengths to JSON files
             with open(os.path.join(output_folder, split + '_CAPTIONS_' + base_filename + '.json'), 'w') as j:
                 json.dump(enc_captions, j)
@@ -320,3 +292,8 @@ def accuracy(scores, targets, k):
     correct = ind.eq(targets.view(-1, 1).expand_as(ind))
     correct_total = correct.view(-1).float().sum()  # 0D tensor
     return correct_total.item() * (100.0 / batch_size)
+
+
+def get_itos_from_stoi(stoi):
+    itos = {stoi[s]: s for s in stoi.keys()}
+    return itos

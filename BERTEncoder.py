@@ -15,6 +15,7 @@ class BERTEncoder(nn.Module):
         # BERT gives us four outputs (see documentation). The first element
         # of this tuple is the output of the topmost Transformer block.
         top_layer_output = bert_outputs[0]
+
         # This tensor has the shape (n_docs, max_length, output_size)
         # where output_size is the size of the contextual representation
         # for each token (768 for a standard BERT).

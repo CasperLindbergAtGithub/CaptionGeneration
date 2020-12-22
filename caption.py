@@ -12,6 +12,7 @@ from skimage.transform import resize as imresize
 from PIL import Image
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+use_bert = True
 
 
 def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=3):
@@ -26,6 +27,7 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
     :return: caption, weights for visualization
     """
 
+    beam_size = 1 if use_bert else beam_size
     k = beam_size
     vocab_size = len(word_map)
 
@@ -79,8 +81,11 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
 
     # s is a number less than or equal to k, because sequences are removed from this process once they hit <end>
     while True:
-
-        embeddings = decoder.embedding(k_prev_words).squeeze(1)  # (s, embed_dim)
+        if use_bert:
+            bert_embedded_encodings = decoder.load_bert_embeddings(seqs)
+            embeddings = bert_embedded_encodings[:, -1, :]
+        else:
+            embeddings = decoder.embedding(k_prev_words).squeeze(1)  # (s, embed_dim)
 
         awe, alpha = decoder.attention(encoder_out, h)  # (s, encoder_dim), (s, num_pixels)
 
@@ -138,6 +143,11 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
 
         # Break if things have been going on too long
         if step > 50:
+            # Finish all sentences.
+            complete_inds = list(set(range(len(seqs))))
+            complete_seqs.extend(seqs[complete_inds].tolist())
+            complete_seqs_alpha.extend(seqs_alpha[complete_inds].tolist())
+            complete_seqs_scores.extend(top_k_scores[complete_inds])
             break
         step += 1
 
@@ -189,9 +199,9 @@ def visualize_att(image_path, seq, alphas, rev_word_map, smooth=True):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Show, Attend, and Tell - Tutorial - Generate Caption')
 
-    img = "data/Flicker8k_Dataset/197504190_fd1fc3d4b7.jpg"
-    model = "checkpoints/BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar"
-    wordmap = "data/WORDMAP_coco_5_cap_per_img_5_min_word_freq.json"
+    img = "data/Flicker8k_Dataset/Flicker8k_images/667626_18933d713e.jpg"
+    model = "checkpoints/BEST_checkpoint_BERT_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
+    wordmap = "data/WORDMAP_flickr8k_5_cap_per_img_5_min_word_freq.json"
     parser.add_argument('--img', '-i', default=img, help='path to image')
     parser.add_argument('--model', '-m', default=model, help='path to model')
     parser.add_argument('--word_map', '-wm', default=wordmap, help='path to word map JSON')

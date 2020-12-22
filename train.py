@@ -9,14 +9,14 @@ from models import Encoder, DecoderWithAttention
 from datasets import *
 from utils import *
 from nltk.translate.bleu_score import corpus_bleu
-from transformers import BertTokenizer
+from create_input_files import max_caption_length
 
 # Data parameters
 data_folder = 'data/'  # folder with data files saved by create_input_files.py
-data_name = 'flickr8k_BERT_5_cap_per_img_5_min_word_freq'  # add / remove BERT if used / not used
+data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'
 
 # Model parameters
-emb_dim = 300  # dimension of word embeddings (not applicable for BERT or GloVe)
+emb_dim = 512  # dimension of word embeddings (not applicable for BERT or GloVe)
 attention_dim = 512  # dimension of attention linear layers
 decoder_dim = 512  # dimension of decoder RNN
 dropout = 0.5
@@ -37,8 +37,9 @@ best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 checkpoint = None  # 'checkpoints/checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'
 fine_tune_encoder = False  # fine-tune encoder?
-fine_tune_decoder_embeddings = True  # fine-tune decoder embeddings?
+fine_tune_decoder_embeddings = False  # fine-tune decoder embeddings?
 pre_trained_embeddings_file = None  # 'data/glove.6B.300d.txt'
+
 bert_model_name = 'bert-base-cased'  # Bert model name or None to not use BERT
 
 
@@ -50,25 +51,17 @@ def main():
     global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder, data_name, word_map
 
     # Read word map
-    word_map = {}
-    if not bert_model_name:
-        word_map_file = os.path.join(data_folder, 'WORDMAP_' + data_name + '.json')
-        with open(word_map_file, 'r') as j:
-            word_map = json.load(j)
-
-    vocab_size = len(word_map)
-
-    bert_tokenizer = None
-    if bert_model_name:
-        bert_tokenizer = BertTokenizer.from_pretrained(bert_model_name)
-        vocab_size = bert_tokenizer.vocab_size
+    word_map_file = os.path.join(data_folder, 'WORDMAP_' + data_name + '.json')
+    with open(word_map_file, 'r') as j:
+        word_map = json.load(j)
 
     # Initialize / load checkpoint
     if checkpoint is None:
         decoder = DecoderWithAttention(attention_dim=attention_dim,
                                        embed_dim=emb_dim,
                                        decoder_dim=decoder_dim,
-                                       vocab_size=vocab_size,
+                                       word_map=word_map,
+                                       max_caption_length=max_caption_length,
                                        dropout=dropout,
                                        bert_model_name=bert_model_name)
 
@@ -109,6 +102,7 @@ def main():
     # Custom dataloaders
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
+
     train_loader = torch.utils.data.DataLoader(
         CaptionDataset(data_folder, data_name, 'TRAIN', transform=transforms.Compose([normalize])),
         batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True)
@@ -140,8 +134,7 @@ def main():
         recent_bleu4 = validate(val_loader=val_loader,
                                 encoder=encoder,
                                 decoder=decoder,
-                                criterion=criterion,
-                                bert_tokenizer=bert_tokenizer)
+                                criterion=criterion)
 
         # Check if there was an improvement
         is_best = recent_bleu4 > best_bleu4
@@ -153,8 +146,12 @@ def main():
             epochs_since_improvement = 0
 
         # Save checkpoint
-        save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
+        if bert_model_name:
+            save_checkpoint('BERT_'+data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
                         decoder_optimizer, recent_bleu4, is_best)
+        else:
+            save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
+                            decoder_optimizer, recent_bleu4, is_best)
 
 
 def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_optimizer, epoch):
@@ -243,11 +240,10 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
                                                                           top5=top5accs))
 
 
-def validate(val_loader, encoder, decoder, criterion, bert_tokenizer=None):
+def validate(val_loader, encoder, decoder, criterion):
     """
     Performs one epoch's validation.
 
-    :param bert_tokenizer:
     :param val_loader: DataLoader for validation data.
     :param encoder: encoder model
     :param decoder: decoder model
@@ -317,8 +313,8 @@ def validate(val_loader, encoder, decoder, criterion, bert_tokenizer=None):
             # If for n images, we have n hypotheses, and references a, b, c... for each image, we need -
             # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
 
-            start_token = bert_tokenizer.cls_token_id if bert_tokenizer else word_map['<start>']
-            pad_token = bert_tokenizer.pad_token_id if bert_tokenizer else word_map['<pad>']
+            start_token = word_map['<start>']
+            pad_token = word_map['<pad>']
 
             # References
             allcaps = allcaps[sort_ind]  # because images were sorted in the decoder
