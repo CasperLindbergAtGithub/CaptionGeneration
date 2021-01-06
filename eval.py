@@ -4,16 +4,17 @@ import torch.utils.data
 import torchvision.transforms as transforms
 from datasets import *
 from utils import *
-from Vocabulary import load_vocab_from_json
 from nltk.translate.bleu_score import corpus_bleu
 import torch.nn.functional as F
 from tqdm import tqdm
 
 # Parameters
-data_folder = '/data'  # folder with data files saved by create_input_files.py
-data_name = 'flickr8k_5_cap_per_img_5_min_token_freq'  # base name shared by data files
-checkpoint = 'checkpoints/BEST_checkpoint_flickr8k_5_cap_per_img_5_min_token_freq.pth.tar'  # model checkpoint
-token_map_file = 'data/VOCABMAP_flickr8k_5_cap_per_img_5_min_token_freq.json'  # word map, ensure it's the same the data was encoded with and the model was trained with
+data_folder = 'data/'  # folder with data files saved by create_input_files.py
+use_bert = False  # Set to true if BERT is used and don't forget to change the checkpoint to BERT checkpoint
+data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'  # base name shared by data files
+checkpoint = 'checkpoints/BEST_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar'  # model checkpoint
+word_map_file = 'data/WORDMAP_flickr8k_5_cap_per_img_5_min_word_freq.json'  # word map, ensure it's the same the data
+# was encoded with and the model was trained with
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
@@ -26,8 +27,9 @@ encoder = checkpoint['encoder']
 encoder = encoder.to(device)
 encoder.eval()
 
-# Load vocab map (stoi)
-word_map = load_vocab_from_json(token_map_file)
+# Load word map (word2ix)
+with open(word_map_file, 'r') as j:
+    word_map = json.load(j)
 rev_word_map = {v: k for k, v in word_map.items()}
 vocab_size = len(word_map)
 
@@ -39,26 +41,25 @@ normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
 def evaluate(beam_size):
     """
     Evaluation
+
     :param beam_size: beam size at which to generate captions for evaluation
     :return: BLEU-4 score
     """
     # DataLoader
     loader = torch.utils.data.DataLoader(
-        CaptionDataset('TEST', transform=transforms.Compose([normalize])),
+        CaptionDataset(data_folder, data_name, 'VAL', transform=transforms.Compose([normalize])),
         batch_size=1, shuffle=True, num_workers=1, pin_memory=True)
-
-    # TODO: Batched Beam Search
-    # Therefore, do not use a batch_size greater than 1 - IMPORTANT!
 
     # Lists to store references (true captions), and hypothesis (prediction) for each image
     # If for n images, we have n hypotheses, and references a, b, c... for each image, we need -
     # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
     references = list()
     hypotheses = list()
+    k = beam_size
 
     # For each image
     for i, (image, caps, caplens, allcaps) in enumerate(
-            tqdm(loader, desc="EVALUATING AT BEAM SIZE " + str(beam_size))):
+            tqdm(loader, desc="EVALUATING AT BEAM SIZE " + str(k))):
 
         k = beam_size
 
@@ -96,8 +97,11 @@ def evaluate(beam_size):
 
         # s is a number less than or equal to k, because sequences are removed from this process once they hit <end>
         while True:
-
-            embeddings = decoder.embedding(k_prev_words).squeeze(1)  # (s, embed_dim)
+            if use_bert:
+                bert_embedded_encodings = decoder.load_bert_embeddings(seqs)
+                embeddings = bert_embedded_encodings[:, -1, :]
+            else:
+                embeddings = decoder.embedding(k_prev_words).squeeze(1)  # (s, embed_dim)
 
             awe, _ = decoder.attention(encoder_out, h)  # (s, encoder_dim), (s, num_pixels)
 
@@ -149,6 +153,10 @@ def evaluate(beam_size):
 
             # Break if things have been going on too long
             if step > 50:
+                # Finish all senctences.
+                complete_inds = list(set(range(len(seqs))))
+                complete_seqs.extend(seqs[complete_inds].tolist())
+                complete_seqs_scores.extend(top_k_scores[complete_inds])
                 break
             step += 1
 
@@ -158,8 +166,7 @@ def evaluate(beam_size):
         # References
         img_caps = allcaps[0].tolist()
         img_captions = list(
-            map(lambda caption: [word for word in caption if word not in {word_map['<start>'], word_map['<end>'],
-                                                                          word_map['<pad>']}],
+            map(lambda c: [w for w in c if w not in {word_map['<start>'], word_map['<end>'], word_map['<pad>']}],
                 img_caps))  # remove <start> and pads
         references.append(img_captions)
 
@@ -175,5 +182,5 @@ def evaluate(beam_size):
 
 
 if __name__ == '__main__':
-    beam_size = 1
+    beam_size = 5
     print("\nBLEU-4 score @ beam size of %d is %.4f." % (beam_size, evaluate(beam_size)))

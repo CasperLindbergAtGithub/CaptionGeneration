@@ -1,192 +1,221 @@
-import json
-from Vocabulary import Vocabulary
 import os
-import h5py
-import cv2
 import numpy as np
-from tqdm import tqdm
-from random import choice, sample
+import h5py
+import json
 import torch
+from tqdm import tqdm
+from collections import Counter
+from random import seed, choice, sample
+from skimage.io import imread
+from skimage.transform import resize as imresize
 
-dataset_image_path = 'data/Flicker8k_Dataset'
-dataset_split_path = 'data/dataset_flickr8k.json'
-data_folder = 'data/'
-data_name = 'flickr8k_5_cap_per_img_5_min_token_freq'  # base name shared by data files
 
-
-def preprocess_data(min_token_freq=5, caption_max_len=50, captions_per_image=5):
+def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_image, min_word_freq, output_folder,
+                       max_len=100):
     """
-    :param captions_per_image: the number of captions for each image
-    :param min_token_freq: words occurring less frequently than this threshold are binned as <unk>
-    :param caption_max_len: maximum allowed length of captions
+    Creates input files for training, validation, and test data.
+
+    :param dataset: name of dataset, one of 'coco', 'flickr8k', 'flickr30k'
+    :param karpathy_json_path: path of Karpathy JSON file with splits and captions
+    :param image_folder: folder with downloaded images
+    :param captions_per_image: number of captions to sample per image
+    :param min_word_freq: words occuring less frequently than this threshold are binned as <unk>s
+    :param output_folder: folder to save files
+    :param max_len: don't sample captions longer than this length
     """
 
-    image_train = []
-    image_validation = []
-    image_test = []
-    captions_train = []
-    captions_validation = []
-    captions_test = []
+    assert dataset in {'coco', 'flickr8k'}
 
-    # Read data
-    dataset = load_dataset()
+    # Read Karpathy JSON
+    with open(karpathy_json_path, 'r') as j:
+        data = json.load(j)
 
-    # Process each image in the dataset
-    for image in dataset["images"]:
+    # Read image paths and captions for each image
+    train_image_paths = []
+    train_image_captions = []
+    val_image_paths = []
+    val_image_captions = []
+    test_image_paths = []
+    test_image_captions = []
+    word_freq = Counter()
 
-        # Read and process the captions for the image
-        processed_captions = process_captions(caption_max_len, image)
+    for img in data['images']:
+        captions = []
+        for c in img['sentences']:
+            # Update word frequency
+            word_freq.update(c['tokens'])
+            if len(c['tokens']) <= max_len:
+                captions.append(c['tokens'])
 
-        if len(processed_captions) == 0:
+        if len(captions) == 0:
             continue
 
-        path = os.path.join(dataset_image_path, image['filename'])
+        path = os.path.join(image_folder, img['filepath'], img['filename']) if dataset == 'coco' else os.path.join(
+            image_folder, img['filename'])
 
-        train_val_test_split(processed_captions, captions_test, captions_train, captions_validation, image, image_test,
-                             image_train, image_validation, path)
+        if img['split'] in {'train', 'restval'}:
+            train_image_paths.append(path)
+            train_image_captions.append(captions)
+        elif img['split'] in {'val'}:
+            val_image_paths.append(path)
+            val_image_captions.append(captions)
+        elif img['split'] in {'test'}:
+            test_image_paths.append(path)
+            test_image_captions.append(captions)
 
-    assert_valid_train_val_test_split(captions_test, captions_train, captions_validation, image_test, image_train,
-                                      image_validation)
+    # Sanity check
+    assert len(train_image_paths) == len(train_image_captions)
+    assert len(val_image_paths) == len(val_image_captions)
+    assert len(test_image_paths) == len(test_image_captions)
 
-    all_captions = captions_train + captions_validation + captions_test
-    vocab = create_vocabulary(all_captions, min_token_freq, caption_max_len)
+    # Create a base/root name for all output files
+    base_filename = dataset + '_' + str(captions_per_image) + '_cap_per_img_' + str(
+        min_word_freq) + '_min_word_freq'
 
-    base_filename = 'flickr8k' + '_' + str(captions_per_image) + '_cap_per_img_' + str(
-        min_token_freq) + '_min_token_freq'
 
-    vocab.save_vocab_to_json(base_filename)
+    # Create word map
+    words = [w for w in word_freq.keys() if word_freq[w] > min_word_freq]
+    word_map = {k: v + 1 for v, k in enumerate(words)}
+    word_map['<unk>'] = len(word_map) + 1
+    word_map['<start>'] = len(word_map) + 1
+    word_map['<end>'] = len(word_map) + 1
+    word_map['<pad>'] = 0
 
-    # Save images to HDF5 file, and captions and their lengths to JSON files.
-    for image_paths, image_captions, split in [(image_train, captions_train, 'TRAIN'),
-                                               (image_validation, captions_validation, 'VAL'),
-                                               (image_test, captions_test, 'TEST')]:
+    # Save word map to a JSON
+    with open(os.path.join(output_folder, 'WORDMAP_' + base_filename + '.json'), 'w') as j:
+        json.dump(word_map, j)
 
-        print("\nReading %s images and captions, storing to file...\n" % split)
+    # Sample captions for each image, save images to HDF5 file, and captions and their lengths to JSON files
+    seed(123)
+    for impaths, imcaps, split in [(train_image_paths, train_image_captions, 'TRAIN'),
+                                   (val_image_paths, val_image_captions, 'VAL'),
+                                   (test_image_paths, test_image_captions, 'TEST')]:
 
-        with h5py.File(os.path.join(data_folder, split + '_IMAGES_' + base_filename + '.hdf5'), 'a') as h:
-            # Note the number of captions we are sampling per image - see sample_captions()
+        with h5py.File(os.path.join(output_folder, split + '_IMAGES_' + base_filename + '.hdf5'), 'a') as h:
+            # Make a note of the number of captions we are sampling per image
             h.attrs['captions_per_image'] = captions_per_image
 
-            # Create dataset inside HDF5 to store images.
-            images = h.require_dataset('images', (len(image_paths), 3, 256, 256), dtype='uint8')
+            # Create dataset inside HDF5 file to store images
+            images = h.require_dataset('images', (len(impaths), 3, 256, 256), dtype='uint8')
 
-            for i, path in enumerate(tqdm(image_paths)):
-                captions = sample_captions(i, captions_per_image, image_captions)
-                img = read_format_image(i, image_paths)
+            print("\nReading %s images and captions, storing to file...\n" % split)
+
+            enc_captions = []
+            caplens = []
+
+            for i, path in enumerate(tqdm(impaths)):
+
+                # Sample captions
+                if len(imcaps[i]) < captions_per_image:
+                    captions = imcaps[i] + [choice(imcaps[i]) for _ in range(captions_per_image - len(imcaps[i]))]
+                else:
+                    captions = sample(imcaps[i], k=captions_per_image)
+
+                # Sanity check
+                assert len(captions) == captions_per_image
+
+                # Read images
+                img = imread(impaths[i])
+                if len(img.shape) == 2:
+                    img = img[:, :, np.newaxis]
+                    img = np.concatenate([img, img, img], axis=2)
+                img = imresize(img, (256, 256), preserve_range=True)
+                img = img.transpose(2, 0, 1)
+                assert img.shape == (3, 256, 256)
+                assert np.max(img) <= 255
 
                 # Save image to HDF5 file
                 images[i] = img
 
-                # Encode captions and get their lengths
-                (encoded_captions, caption_lengths) = vocab.encode(captions)
+                for j, c in enumerate(captions):
+                    # Encode captions
+                    enc_c = [word_map['<start>']] + [word_map.get(word, word_map['<unk>']) for word in c] + [
+                        word_map['<end>']] + [word_map['<pad>']] * (max_len - len(c))
 
-                # Save to JSON
-                save_encoded_captions_and_lengths_to_json(base_filename, split, encoded_captions,
-                                                          caption_lengths)
+                    # Find caption lengths
+                    c_len = len(c) + 2
+
+                    enc_captions.append(enc_c)
+                    caplens.append(c_len)
+
+            # Sanity check
+            assert images.shape[0] * captions_per_image == len(enc_captions) == len(caplens)
+            # Save encoded captions and their lengths to JSON files
+            with open(os.path.join(output_folder, split + '_CAPTIONS_' + base_filename + '.json'), 'w') as j:
+                json.dump(enc_captions, j)
+
+            with open(os.path.join(output_folder, split + '_CAPLENS_' + base_filename + '.json'), 'w') as j:
+                json.dump(caplens, j)
 
 
-def load_dataset():
-    with open(dataset_split_path, 'r') as f:
-        dataset = json.load(f)
-    return dataset
-
-
-def read_format_image(i, image_paths):
+def init_embedding(embeddings):
     """
-    ImageNet requires 3-channel 256x256 images, so images must be resized.
+    Fills embedding tensor with values from the uniform distribution.
+
+    :param embeddings: embedding tensor
     """
-    img = cv2.imread(image_paths[i])
-    if len(img.shape) == 2:  # Grey-scale image
-        img = img[:, :, np.newaxis]
-        img = np.concatenate([img, img, img], axis=2)
-    img = cv2.resize(img, (256, 256))
-    img = img.transpose(2, 0, 1)
-    assert img.shape == (3, 256, 256)
-    assert np.max(img) <= 255
-
-    return img
+    bias = np.sqrt(3.0 / embeddings.size(1))
+    torch.nn.init.uniform_(embeddings, -bias, bias)
 
 
-def sample_captions(i, captions_per_image, image_captions) -> list:
+def load_embeddings(emb_file, word_map):
     """
-    If number of captions for an image is less than captions_per_image, we need to sample from
-    the existing captions to fill out.
-    """
-    if len(image_captions[i]) < captions_per_image:  # with replacement
-        captions = image_captions[i] + [choice(image_captions[i])
-                                        for _ in range(captions_per_image - len(image_captions[i]))]
-    else:  # without replacement
-        captions = sample(image_captions[i], k=captions_per_image)
-    assert len(captions) == captions_per_image  # Sanity check
+    Creates an embedding tensor for the specified word map, for loading into the model.
 
-    return captions
-
-
-def process_captions(caption_max_len, image):
-    captions = []
-    for caption in image['sentences']:
-        tokens = caption["tokens"]
-        if len(tokens) <= caption_max_len:
-            captions.append(tokens)
-    return captions
-
-
-def train_val_test_split(captions, captions_test, captions_train, captions_validation, image, image_test, image_train,
-                         image_validation, path):
-    if image['split'] in {'train'}:
-        image_train.append(path)
-        captions_train.append(captions)
-    elif image['split'] in {'val'}:
-        image_validation.append(path)
-        captions_validation.append(captions)
-    elif image['split'] in {'test'}:
-        image_test.append(path)
-        captions_test.append(captions)
-
-
-def assert_valid_train_val_test_split(captions_test, captions_train, captions_validation, image_test, image_train,
-                                      image_validation):
-    assert len(image_train) == len(captions_train)
-    assert len(image_validation) == len(captions_validation)
-    assert len(image_test) == len(captions_test)
-
-
-def create_vocabulary(captions, min_token_freq, caption_max_len) -> Vocabulary:
-    vocab = Vocabulary(min_token_freq, caption_max_len)
-    vocab.build(captions)
-    return vocab
-
-
-def save_vocab_map_to_json(base_filename, vocab_map):
-    with open(os.path.join(data_folder, 'VOCABMAP_' + base_filename + '.json'), 'w') as j:
-        json.dump(vocab_map, j)
-
-
-def save_encoded_captions_and_lengths_to_json(base_filename, split, encoded_captions, caption_lengths):
-    with open(os.path.join(data_folder, split + '_CAPTIONS_' + base_filename + '.json'), 'w') as j:
-        json.dump(encoded_captions, j)
-
-    with open(os.path.join(data_folder, split + '_CAPLENS_' + base_filename + '.json'), 'w') as j:
-        json.dump(caption_lengths, j)
-
-
-def adjust_learning_rate(optimizer, shrink_factor):
-    """
-    Shrinks learning rate by a specified factor.
-    :param optimizer: optimizer whose learning rate must be shrunk.
-    :param shrink_factor: factor in interval (0, 1) to multiply learning rate with.
+    :param emb_file: file containing embeddings (stored in GloVe format)
+    :param word_map: word map
+    :return: embeddings in the same order as the words in the word map, dimension of embeddings
     """
 
-    print("\nDECAYING learning rate.")
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = param_group['lr'] * shrink_factor
-    print("The new learning rate is %f\n" % (optimizer.param_groups[0]['lr'],))
+    # Find embedding dimension
+    with open(emb_file, 'r') as f:
+        emb_dim = len(f.readline().split(' ')) - 1
+
+    vocab = set(word_map.keys())
+
+    # Create tensor to hold embeddings, initialize
+    embeddings = torch.FloatTensor(len(vocab), emb_dim)
+    init_embedding(embeddings)
+
+    # Read embedding file
+    print("\nLoading embeddings...")
+    for line in open(emb_file, 'r', encoding="utf8"):
+        line = line.split(' ')
+
+        emb_word = line[0]
+        embedding = list(map(lambda t: float(t), filter(lambda n: n and not n.isspace(), line[1:])))
+
+        # Ignore word if not in train_vocab
+        if emb_word not in vocab:
+            continue
+
+        embeddings[word_map[emb_word]] = torch.FloatTensor(embedding)
+
+    for weird_token in ['<unk>', '<start>', '<end>', '<pad>']:
+        embeddings[word_map[weird_token]] = 2 * torch.rand(emb_dim) - 1
+
+    return embeddings, emb_dim
 
 
-def save_checkpoint(epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer, decoder_optimizer,
+def clip_gradient(optimizer, grad_clip):
+    """
+    Clips gradients computed during backpropagation to avoid explosion of gradients.
+
+    :param optimizer: optimizer with the gradients to be clipped
+    :param grad_clip: clip value
+    """
+    for group in optimizer.param_groups:
+        for param in group['params']:
+            if param.grad is not None:
+                param.grad.data.clamp_(-grad_clip, grad_clip)
+
+
+def save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer, decoder_optimizer,
                     bleu4, is_best):
     """
     Saves model checkpoint.
+
+    :param data_name: base name of processed dataset
     :param epoch: epoch number
     :param epochs_since_improvement: number of epochs since last improvement in BLEU-4 score
     :param encoder: encoder model
@@ -203,12 +232,14 @@ def save_checkpoint(epoch, epochs_since_improvement, encoder, decoder, encoder_o
              'decoder': decoder,
              'encoder_optimizer': encoder_optimizer,
              'decoder_optimizer': decoder_optimizer}
-    absolute_path = os.path.abspath(os.curdir)+'\\checkpoints\\'
-    filename = 'checkpoint_' + data_name + '.pth.tar'
-    torch.save(state, absolute_path + filename)
+
     # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
     if is_best:
-        torch.save(state, absolute_path + 'BEST_' + filename)
+        filename = 'checkpoints/BEST_checkpoint_' + data_name + '.pth.tar'
+        torch.save(state, filename)
+    else:
+        filename = 'checkpoints/checkpoint_' + data_name + '.pth.tar'
+        torch.save(state, filename)
 
 
 class AverageMeter(object):
@@ -232,21 +263,24 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def clip_gradient(optimizer, grad_clip):
+def adjust_learning_rate(optimizer, shrink_factor):
     """
-    Clips gradients computed during backpropagation to avoid explosion of gradients.
-    :param optimizer: optimizer with the gradients to be clipped
-    :param grad_clip: clip value
+    Shrinks learning rate by a specified factor.
+
+    :param optimizer: optimizer whose learning rate must be shrunk.
+    :param shrink_factor: factor in interval (0, 1) to multiply learning rate with.
     """
-    for group in optimizer.param_groups:
-        for param in group['params']:
-            if param.grad is not None:
-                param.grad.data.clamp_(-grad_clip, grad_clip)
+
+    print("\nDECAYING learning rate.")
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = param_group['lr'] * shrink_factor
+    print("The new learning rate is %f\n" % (optimizer.param_groups[0]['lr'],))
 
 
 def accuracy(scores, targets, k):
     """
     Computes top-k accuracy, from predicted and true labels.
+
     :param scores: scores from the model
     :param targets: true labels
     :param k: k in top-k accuracy
@@ -258,3 +292,8 @@ def accuracy(scores, targets, k):
     correct = ind.eq(targets.view(-1, 1).expand_as(ind))
     correct_total = correct.view(-1).float().sum()  # 0D tensor
     return correct_total.item() * (100.0 / batch_size)
+
+
+def get_itos_from_stoi(stoi):
+    itos = {stoi[s]: s for s in stoi.keys()}
+    return itos

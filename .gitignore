@@ -1,5 +1,4 @@
 data/
-venv/
+checkpoints/
 __pycache__/
 .idea/
-checkpoints/

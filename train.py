@@ -9,20 +9,23 @@ from models import Encoder, DecoderWithAttention
 from datasets import *
 from utils import *
 from nltk.translate.bleu_score import corpus_bleu
-from Vocabulary import load_vocab_from_json
+from create_input_files import max_caption_length
 
+# Data parameters
+data_folder = 'data/'  # folder with data files saved by create_input_files.py
+data_name = 'coco_5_cap_per_img_5_min_word_freq'
 
 # Model parameters
-emb_dim = 512  # dimension of word embeddings
+emb_dim = 300  # dimension of word embeddings (not applicable for BERT or GloVe)
 attention_dim = 512  # dimension of attention linear layers
 decoder_dim = 512  # dimension of decoder RNN
 dropout = 0.5
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
+device = torch.device("cpu")#torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
 # Training parameters
-start_epoch = 0
-epochs = 120  # number of epochs to train for (if early stopping is not triggered)
+start_epoch = 17
+epochs = 30  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
 batch_size = 32
 workers = 1  # for data-loading; right now, only 1 works with h5py
@@ -32,8 +35,12 @@ grad_clip = 5.  # clip gradients at an absolute value of
 alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
-fine_tune_encoder = False  # fine-tune encoder?
-checkpoint = None  # path to checkpoint, None if none
+
+checkpoint = 'checkpoints/BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'
+fine_tune_encoder = True  # fine-tune encoder?
+fine_tune_decoder_embeddings = True  # fine-tune decoder embeddings?
+pre_trained_embeddings_file = None #'data/glove.6B.300d.txt'
+bert_model_name = None#'bert-base-cased'  # Bert model name or None to not use BERT
 
 
 def main():
@@ -41,21 +48,31 @@ def main():
     Training and validation.
     """
 
-    global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder
+    global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder, data_name, word_map
 
     # Read word map
-    word_map = load_vocab_from_json(data_name)
+    word_map_file = os.path.join(data_folder, 'WORDMAP_' + data_name + '.json')
+    with open(word_map_file, 'r') as j:
+        word_map = json.load(j)
 
     # Initialize / load checkpoint
     if checkpoint is None:
         decoder = DecoderWithAttention(attention_dim=attention_dim,
                                        embed_dim=emb_dim,
                                        decoder_dim=decoder_dim,
-                                       vocab_size=len(word_map),
-                                       dropout=dropout)
+                                       word_map=word_map,
+                                       max_caption_length=max_caption_length,
+                                       dropout=dropout,
+                                       bert_model_name=bert_model_name)
+
+        if pre_trained_embeddings_file:
+            pretrained_embeddings, _ = load_embeddings(pre_trained_embeddings_file, word_map)
+            decoder.load_pretrained_embeddings(pretrained_embeddings)  # pretrained_embeddings should be of
+            # dimensions (len(word_map), emb_dim)
+
+        decoder.fine_tune_embeddings(fine_tune_decoder_embeddings)
         decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
                                              lr=decoder_lr)
-
         encoder = Encoder()
         encoder.fine_tune(fine_tune_encoder)
         encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
@@ -85,11 +102,12 @@ def main():
     # Custom dataloaders
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
+
     train_loader = torch.utils.data.DataLoader(
-        CaptionDataset('TRAIN', transform=transforms.Compose([normalize])),
+        CaptionDataset(data_folder, data_name, 'TRAIN', transform=transforms.Compose([normalize])),
         batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(
-        CaptionDataset('VAL', transform=transforms.Compose([normalize])),
+        CaptionDataset(data_folder, data_name, 'VAL', transform=transforms.Compose([normalize])),
         batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True)
 
     # Epochs
@@ -116,8 +134,7 @@ def main():
         recent_bleu4 = validate(val_loader=val_loader,
                                 encoder=encoder,
                                 decoder=decoder,
-                                criterion=criterion,
-                                word_map=word_map)
+                                criterion=criterion)
 
         # Check if there was an improvement
         is_best = recent_bleu4 > best_bleu4
@@ -129,13 +146,18 @@ def main():
             epochs_since_improvement = 0
 
         # Save checkpoint
-        save_checkpoint(epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
+        if bert_model_name:
+            save_checkpoint('BERT_'+data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
                         decoder_optimizer, recent_bleu4, is_best)
+        else:
+            save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
+                            decoder_optimizer, recent_bleu4, is_best)
 
 
 def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_optimizer, epoch):
     """
     Performs one epoch's training.
+
     :param train_loader: DataLoader for training data
     :param encoder: encoder model
     :param decoder: decoder model
@@ -179,9 +201,8 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         # Calculate loss
         loss = criterion(scores, targets)
 
-            # Add doubly stochastic attention regularization
+        # Add doubly stochastic attention regularization
         loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
-
         # Back prop.
         decoder_optimizer.zero_grad()
         if encoder_optimizer is not None:
@@ -209,7 +230,7 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
 
         # Print status
         if i % print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}]\t'
+            print('\nEpoch: [{0}][{1}/{2}]\t'
                   'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data Load Time {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
@@ -219,10 +240,10 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
                                                                           top5=top5accs))
 
 
-def validate(val_loader, encoder, decoder, criterion, word_map):
+def validate(val_loader, encoder, decoder, criterion):
     """
     Performs one epoch's validation.
-    :param word_map:
+
     :param val_loader: DataLoader for validation data.
     :param encoder: encoder model
     :param decoder: decoder model
@@ -292,12 +313,15 @@ def validate(val_loader, encoder, decoder, criterion, word_map):
             # If for n images, we have n hypotheses, and references a, b, c... for each image, we need -
             # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
 
+            start_token = word_map['<start>']
+            pad_token = word_map['<pad>']
+
             # References
             allcaps = allcaps[sort_ind]  # because images were sorted in the decoder
             for j in range(allcaps.shape[0]):
                 img_caps = allcaps[j].tolist()
                 img_captions = list(
-                    map(lambda c: [w for w in c if w not in {word_map['<start>'], word_map['<pad>']}],
+                    map(lambda c: [w for w in c if w not in {start_token, pad_token}],
                         img_caps))  # remove <start> and pads
                 references.append(img_captions)
 
