@@ -12,10 +12,10 @@ from skimage.transform import resize as imresize
 from PIL import Image
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-use_bert = True
+use_bert = False
 
 
-def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=3):
+def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=5):
     """
     Reads an image and captions it with beam search.
 
@@ -27,7 +27,6 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
     :return: caption, weights for visualization
     """
 
-    beam_size = 1 if use_bert else beam_size
     k = beam_size
     vocab_size = len(word_map)
 
@@ -197,10 +196,10 @@ def visualize_att(image_path, seq, alphas, rev_word_map, smooth=True):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Show, Attend, and Tell - Tutorial - Generate Caption')
+    parser = argparse.ArgumentParser(description='Show, Attend, and Tell - Generate Caption')
 
-    img = "data/Flicker8k_Dataset/Flicker8k_images/667626_18933d713e.jpg"
-    model = "checkpoints/BEST_checkpoint_BERT_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
+    img = "../captionData/export/23.jpg"
+    model = "checkpoints/BEST_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
     wordmap = "data/WORDMAP_flickr8k_5_cap_per_img_5_min_word_freq.json"
     parser.add_argument('--img', '-i', default=img, help='path to image')
     parser.add_argument('--model', '-m', default=model, help='path to model')

@@ -10,9 +10,9 @@ from tqdm import tqdm
 
 # Parameters
 data_folder = 'data/'  # folder with data files saved by create_input_files.py
-use_bert = True
+use_bert = False  # Set to true if BERT is used and don't forget to change the checkpoint to BERT checkpoint
 data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'  # base name shared by data files
-checkpoint = 'checkpoints/BEST_checkpoint_BERT_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar'  # model checkpoint
+checkpoint = 'checkpoints/BEST_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar'  # model checkpoint
 word_map_file = 'data/WORDMAP_flickr8k_5_cap_per_img_5_min_word_freq.json'  # word map, ensure it's the same the data
 # was encoded with and the model was trained with
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
@@ -47,7 +47,7 @@ def evaluate(beam_size):
     """
     # DataLoader
     loader = torch.utils.data.DataLoader(
-        CaptionDataset(data_folder, data_name, 'TEST', transform=transforms.Compose([normalize])),
+        CaptionDataset(data_folder, data_name, 'VAL', transform=transforms.Compose([normalize])),
         batch_size=1, shuffle=True, num_workers=1, pin_memory=True)
 
     # Lists to store references (true captions), and hypothesis (prediction) for each image
@@ -55,7 +55,6 @@ def evaluate(beam_size):
     # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
     references = list()
     hypotheses = list()
-    beam_size = 1 if use_bert else beam_size
     k = beam_size
 
     # For each image
@@ -100,7 +99,7 @@ def evaluate(beam_size):
         while True:
             if use_bert:
                 bert_embedded_encodings = decoder.load_bert_embeddings(seqs)
-                embeddings = bert_embedded_encodings[:,-1,:]
+                embeddings = bert_embedded_encodings[:, -1, :]
             else:
                 embeddings = decoder.embedding(k_prev_words).squeeze(1)  # (s, embed_dim)
 

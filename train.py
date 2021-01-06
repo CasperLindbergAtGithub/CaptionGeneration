@@ -13,19 +13,19 @@ from create_input_files import max_caption_length
 
 # Data parameters
 data_folder = 'data/'  # folder with data files saved by create_input_files.py
-data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'
+data_name = 'coco_5_cap_per_img_5_min_word_freq'
 
 # Model parameters
-emb_dim = 512  # dimension of word embeddings (not applicable for BERT or GloVe)
+emb_dim = 300  # dimension of word embeddings (not applicable for BERT or GloVe)
 attention_dim = 512  # dimension of attention linear layers
 decoder_dim = 512  # dimension of decoder RNN
 dropout = 0.5
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
+device = torch.device("cpu")#torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
 # Training parameters
-start_epoch = 0
-epochs = 24  # number of epochs to train for (if early stopping is not triggered)
+start_epoch = 17
+epochs = 30  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
 batch_size = 32
 workers = 1  # for data-loading; right now, only 1 works with h5py
@@ -35,12 +35,12 @@ grad_clip = 5.  # clip gradients at an absolute value of
 alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
-checkpoint = None  # 'checkpoints/checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'
-fine_tune_encoder = False  # fine-tune encoder?
-fine_tune_decoder_embeddings = False  # fine-tune decoder embeddings?
-pre_trained_embeddings_file = None  # 'data/glove.6B.300d.txt'
 
-bert_model_name = 'bert-base-cased'  # Bert model name or None to not use BERT
+checkpoint = 'checkpoints/BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'
+fine_tune_encoder = True  # fine-tune encoder?
+fine_tune_decoder_embeddings = True  # fine-tune decoder embeddings?
+pre_trained_embeddings_file = None #'data/glove.6B.300d.txt'
+bert_model_name = None#'bert-base-cased'  # Bert model name or None to not use BERT
 
 
 def main():
